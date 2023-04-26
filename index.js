@@ -30,7 +30,7 @@ async function run() {
   for (let i = 0; i < tabListItems.length; i++) {
     // await tabListItems[i].click();
     console.log(
-      "Item " +
+      "\n\nItem " +
         i +
         " : " +
         (await (await tabListItems[i].getProperty("innerHTML")).jsonValue())
@@ -48,49 +48,58 @@ async function run() {
       .toLowerCase();
     await page.waitForSelector(`div#${href}Accordion`);
     const accordionHeader = await page.$$(`div#${href}Accordion > h3`);
-    const accordionDiv = await page.$$(`div#${href}Accordion > div`);
+    // const accordionDiv = await page.$$(`div#${href}Accordion > div`);
     console.log(href);
     // NOTE: accordionHeader.length = accordionDiv.length
     for (let j = 0; j < accordionHeader.length; j++) {
-      console.log(j);
-      // const elementIdForJ = await (
-      //   await accordionHeader[j].getProperty("id")
-      // ).jsonValue();
-      // console.log(`elementIdForJ : ${elementIdForJ}`);
-      // console.log("before promise.all");
-      // await Promise.all([
-      //   // page.waitForNavigation(),
-      //   page.waitForSelector(`#${elementIdForJ}`, `[aria-selected="true"]`),
-      //   accordionHeader[j].click(),
-      //   // page.waitForSelector(`#${elementId}[aria-selected="true"]`),
-      // ]);
-      // console.log("after promise.all");
+      console.log(`accordionHeader index : ${j}`);
       console.log(
         await (await accordionHeader[j].getProperty("innerText")).jsonValue()
       );
-      // await accordionHeader[j].click({delay:1});
-      let d = await accordionDiv[j].$$("div > h3");
-      let e = await accordionDiv[j].$$("div > div");
-      console.log(d.length === e.length);
-      console.log(d.length);
-      console.log(e.length, '\n\n');
-      for (let k = 0; k < d.length; k++) {
-        console.log('k : ', k);
-        console.log(
-          "\t" + (await (await d[k].getProperty("innerHTML")).jsonValue())
-        );
-        // const elementIdForK = await (await d[k].getProperty("id")).jsonValue();
-        // console.log("elementIdForK", elementIdForK);
-        // console.log("k: before promise.all");
-        // await Promise.all([
-        //   page.waitForSelector(`#${elementIdForK}`, `[aria-selected='true']`),
-        //   d[k].click(),
-        // ]);
-        // console.log("k : after promise.all");
+      const accordionDiv = await page.evaluateHandle(
+        (el) => el.nextElementSibling,
+        accordionHeader[j]
+      );
+      let accordionDivChilds = await accordionDiv.$$(':scope > *');
+      for(let k=0; k<accordionDivChilds.length; k++) {
+        // console.log('\t' + await (await accordionDivChilds[k].getProperty('tagName')).jsonValue());
+        const tagName = await (await accordionDivChilds[k].getProperty('tagName')).jsonValue();
+        if(tagName === 'H3') {
+          console.log('\t' + await (await accordionDivChilds[k].getProperty('innerText')).jsonValue());
+        }
+        if(tagName === 'TABLE'){
+          console.log('\tINSIDE TABLE');
+        }
+        if(tagName === 'DIV') {
+          console.log('\tINSIDE DIV');
+          const childs = await accordionDivChilds[k].$$(':scope > *');
+          for(let l = 0; l<childs.length; l++) {
+            const tagName = await (await childs[l].getProperty('tagName')).jsonValue();
+            // console.log('\t' + tagName);
+            if(tagName === 'H3') {
+              console.log('\t\t' + await (await childs[l].getProperty('innerText')).jsonValue());
+            }
+            if(tagName === 'DIV') {
+              console.log('\t\tDIV');
+              const finalChilds = await childs[l].$$(':scope > *');
+              for(let m = 0; m < finalChilds.length; m++) {
+                // console.log('\t\t\t' + await (await finalChilds[m].getProperty('tagName')).jsonValue());
+                const tagName = await (await finalChilds[m].getProperty('tagName')).jsonValue();
+                if(tagName === 'TABLE') {
+                  console.log('\t\t\t' + 'INSIDE TABLE');
+                }
+              }
+            }
+            if(tagName === 'TABLE') {
+              console.log('\t\t' + 'INSIDE TABLE')
+            }
+          }
+        }
       }
-
     }
   }
+  console.log('Completed... \nClosing browser...\n');
+  await browser.close();
 }
 
 run();
