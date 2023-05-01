@@ -6,8 +6,9 @@ const queue = [];
 /*
 Each queue element : [type, id, status]
 type: DIR / ID / null (in case of backward)
-value: dirname / id_name
+value: dirname/title (in case of id)
 status: FORWARD / BACKWARD / DOWNLOAD
+id: id_name / null (in case of dir)
 */
 
 async function run() {
@@ -24,6 +25,7 @@ async function run() {
     // waitUntil: "domcontentloaded",
     waitUntil: "networkidle2",
   });
+  await (await browser.pages())[0].close();
   const loginLink = await page.$("#login-link");
   await loginLink.click();
   await page.waitForSelector("#apikey");
@@ -55,7 +57,7 @@ async function run() {
         " : " +
         (await (await tabListItems[i].getProperty("innerHTML")).jsonValue())
     );
-    queue.push(["DIR", tabListItemText, "FORWARD"]);
+    queue.push(["DIR", tabListItemText, "FORWARD", null]);
     console.log(tabListItemText);
     console.log(
       await tabListItems[i].$eval("a", (n) => n.getAttribute("href"))
@@ -76,7 +78,7 @@ async function run() {
         await accordionHeader[j].getProperty("innerText")
       ).jsonValue();
       console.log(accordionHeaderText);
-      queue.push(["DIR", accordionHeaderText, "FORWARD"]);
+      queue.push(["DIR", accordionHeaderText, "FORWARD", null]);
       const accordionDiv = await page.evaluateHandle(
         (el) => el.nextElementSibling,
         accordionHeader[j]
@@ -114,23 +116,98 @@ async function run() {
               ).jsonValue();
               if (buttonText.toLowerCase().includes(process.env.FILE_TYPE)) {
                 console.log("\t\t\tButton text : " + buttonText);
-                const idName = await (await downloadButton.getProperty('id')).jsonValue()
-                console.log('\t\t\tId : ' + idName);
-                queue.push(['ID', idName , 'DOWNLOAD']);
+                const idName = await (
+                  await downloadButton.getProperty("id")
+                ).jsonValue();
+                console.log("\t\t\tId : " + idName);
+                queue.push(["ID", downloadTitleText, "DOWNLOAD", idName]);
               }
             }
           }
         }
         if (tagName === "H3") {
-          console.log(
-            "\tFrom here: " +
-              (await (
-                await accordionDivChilds[k].getProperty("innerText")
-              ).jsonValue())
-          );
-        }
-        if (tagName === "DIV") {
-          console.log("\tINSIDE DIV");
+          const accordianChildHeadingText = await (
+            await accordionDivChilds[k].getProperty("innerText")
+          ).jsonValue();
+          k++;
+          console.log("\tFrom here: " + accordianChildHeadingText);
+          queue.push(["DIR", accordianChildHeadingText, "FORWARD", null]);
+          if (
+            (await (
+              await accordionDivChilds[k].getProperty("tagName")
+            ).jsonValue()) === "DIV"
+          ) {
+            console.log("\tINSIDE DIV");
+            const childs = await accordionDivChilds[k].$$(":scope > *");
+            for (let l = 0; l < childs.length; l++) {
+              const tagName = await (
+                await childs[l].getProperty("tagName")
+              ).jsonValue();
+              if (tagName === "TABLE") {
+                // console.log('\n\nThis should be in section : ecqm');
+                console.log("\t\t" + "INSIDE TABLE");
+                const className = await page.evaluate(
+                  (el) => el.className,
+                  childs[l]
+                );
+                console.log("\t\tClassName : " + className);
+                let indexCMS = null;
+                // console.log(await (await childs[l].getProperty('innerHTML')).jsonValue());
+                const tableHeads = await childs[l].$$(
+                  "table > thead > tr > th"
+                );
+                // console.log('\t\t' + tableHeads);
+                console.log("\t\t" + tableHeads.length);
+                for (let m = 0; m < tableHeads.length; m++) {
+                  const title = await (
+                    await tableHeads[m].getProperty("innerText")
+                  ).jsonValue();
+                  // console.log('\t\t\ttitle : ' + title);
+                  if (title.toLowerCase().includes("cms")) {
+                    indexCMS = m;
+                  }
+                }
+                const downloadRows = await childs[l].$$("table > tbody > tr");
+                // console.log("\t\tdownloadRows : " + downloadRows);
+                console.log("\t\tlength : " + downloadRows.length);
+                for (let downloadRow of downloadRows) {
+                  const downloadTitle = await downloadRow.$(
+                    ".vsac-downloadTitle"
+                  );
+                  const downloadTitleText = await (
+                    await downloadTitle.getProperty("innerText")
+                  ).jsonValue();
+                  console.log("\t\tdownloadTitleText : " + downloadTitleText);
+                  const rowData = await downloadRow.$$("td");
+                  const buttons = await rowData[indexCMS].$$("button");
+                  // console.log('\t\t'+buttons);
+                  // console.log('\t\t'+buttons.length);
+                  for (let button of buttons) {
+                    const buttonText = await (
+                      await button.getProperty("innerText")
+                    ).jsonValue();
+                    if (
+                      buttonText.toLowerCase().includes(process.env.FILE_TYPE)
+                    ) {
+                      console.log("\t\t\t" + buttonText);
+                      const buttonId = await (
+                        await button.getProperty("id")
+                      ).jsonValue();
+                      console.log("\t\t\t" + buttonId);
+                      queue.push([
+                        "ID",
+                        downloadTitleText,
+                        "DOWNLOAD",
+                        buttonId,
+                      ]);
+                    }
+                  }
+                }
+              }
+            }
+          }
+          queue.push(["DIR", accordianChildHeadingText, "BACKWARD", null]);
+        } else if (tagName === "DIV") {
           const childs = await accordionDivChilds[k].$$(":scope > *");
           for (let l = 0; l < childs.length; l++) {
             const tagName = await (
@@ -139,81 +216,29 @@ async function run() {
             if (tagName === "H3") {
               console.log(
                 "\t\t" +
-                  (await (await childs[l].getProperty("innerText")).jsonValue())
+                  ((await (
+                    await childs[l].getProperty("innerText")
+                  ).jsonValue()) +
+                    "(for C-CDA)")
               );
             }
             if (tagName === "DIV") {
-              console.log("\t\tDIV");
               const finalChilds = await childs[l].$$(":scope > *");
               for (let m = 0; m < finalChilds.length; m++) {
-                // console.log('\t\t\t' + await (await finalChilds[m].getProperty('tagName')).jsonValue());
                 const tagName = await (
                   await finalChilds[m].getProperty("tagName")
                 ).jsonValue();
                 if (tagName === "TABLE") {
-                  console.log("\t\t\t" + "INSIDE TABLE");
-                }
-              }
-            }
-            if (tagName === "TABLE") {
-              // console.log('\n\nThis should be in section : ecqm');
-              console.log("\t\t" + "INSIDE TABLE");
-              const className = await page.evaluate(
-                (el) => el.className,
-                childs[l]
-              );
-              console.log("\t\tClassName : " + className);
-              let indexCMS = null;
-              // console.log(await (await childs[l].getProperty('innerHTML')).jsonValue());
-              const tableHeads = await childs[l].$$("table > thead > tr > th");
-              // console.log('\t\t' + tableHeads);
-              console.log("\t\t" + tableHeads.length);
-              for (let m = 0; m < tableHeads.length; m++) {
-                const title = await (
-                  await tableHeads[m].getProperty("innerText")
-                ).jsonValue();
-                // console.log('\t\t\ttitle : ' + title);
-                if (title.toLowerCase().includes("cms")) {
-                  indexCMS = m;
-                }
-              }
-              const downloadRows = await childs[l].$$("table > tbody > tr");
-              // console.log("\t\tdownloadRows : " + downloadRows);
-              console.log("\t\tlength : " + downloadRows.length);
-              for (let downloadRow of downloadRows) {
-                const downloadTitle = await downloadRow.$(
-                  ".vsac-downloadTitle"
-                );
-                const downloadTitleText = await (
-                  await downloadTitle.getProperty("innerText")
-                ).jsonValue();
-                console.log("\t\tdownloadTitleText : " + downloadTitleText);
-                const rowData = await downloadRow.$$("td");
-                const buttons = await rowData[indexCMS].$$("button");
-                // console.log('\t\t'+buttons);
-                // console.log('\t\t'+buttons.length);
-                for (let button of buttons) {
-                  const buttonText = await (
-                    await button.getProperty("innerText")
-                  ).jsonValue();
-                  if (
-                    buttonText.toLowerCase().includes(process.env.FILE_TYPE)
-                  ) {
-                    console.log("\t\t\t" + buttonText);
-                    console.log(
-                      "\t\t\t" +
-                        (await (await button.getProperty("id")).jsonValue())
-                    );
-                  }
+                  console.log("\t\t\t" + "INSIDE TABLE (for C-CDA)");
                 }
               }
             }
           }
         }
       }
-      queue.push(["DIR", accordionHeaderText, "BACKWARD"]);
+      queue.push(["DIR", accordionHeaderText, "BACKWARD", null]);
     }
-    queue.push(["DIR", tabListItemText, "BACKWARD"]);
+    queue.push(["DIR", tabListItemText, "BACKWARD", null]);
   }
   console.log("QUEUE contents : \n");
   console.log("Length : " + queue.length);
