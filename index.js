@@ -221,9 +221,11 @@ async function run() {
                   ).jsonValue()) +
                     "(for C-CDA)")
               );
-            }
-            if (tagName === "DIV") {
-              const finalChilds = await childs[l].$$(":scope > *");
+              const nextSibling = await page.evaluateHandle(
+                (el) => el.nextElementSibling,
+                childs[l]
+              );
+              const finalChilds = await nextSibling.$$(":scope > *");
               for (let m = 0; m < finalChilds.length; m++) {
                 const tagName = await (
                   await finalChilds[m].getProperty("tagName")
