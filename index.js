@@ -1,15 +1,74 @@
 import puppeteer from "puppeteer";
 import dotenv from "dotenv";
+import path from "path";
+import { waitForDownload } from "puppeteer-utilz";
 dotenv.config();
+
+const delay = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const queue = [];
 /*
 Each queue element : [type, id, status]
-type: DIR / ID / null (in case of backward)
+type: DIR / ID / TABLE / null (in case of backward)
 value: dirname/title (in case of id)
-status: FORWARD / BACKWARD / DOWNLOAD
-id: id_name / null (in case of dir)
+status: FORWARD / BACKWARD / DOWNLOAD / FORMAT (Eg: TABLE|Name|OID)
+id: id_name / null (in case of dir) / CSV (in case of table)
 */
+
+function downloadIdFormatter(id) {
+  const tempList = id.split(".");
+  let tempIdString = "";
+  tempIdString += tempList[0];
+  for (let i = 1; i < tempList.length; i++) {
+    tempIdString = tempIdString  + "\\." + tempList[i];
+  }
+  return tempIdString;
+}
+
+async function processQueue(queue, page) {
+  let downloadStringList = [".", "download"];
+  const client = await page.target().createCDPSession();
+
+  console.log("\n\nDOWNLOADING STARTED...\n\n\n");
+  for (const [index, element] of queue.entries()) {
+    // console.log(downloadStringList);
+    if (element[0] === "DIR" && element[2] === "FORWARD") {
+      downloadStringList.push(element[1]);
+    } else if (element[0] === "DIR" && element[2] === "BACKWARD") {
+      downloadStringList.pop();
+    } else if (element[0] === "ID") {
+      const tempDownloadPath = downloadStringList.join("/");
+
+      await client.send("Page.setDownloadBehavior", {
+        behavior: "allow",
+        downloadPath: tempDownloadPath,
+      });
+      console.log('Download path : ' + tempDownloadPath);
+      console.log('Unformatted id : ' + element[3]);
+      const downloadId = "#" + element[3];
+      const downloadIdFormatted = downloadIdFormatter(downloadId);
+      console.log("downloadIdFormatted : " + downloadIdFormatted);
+      console.log('isTrue : ( ' + '#eh_only\\.cms\\.20220505\\.excel' + ' === ' + downloadIdFormatted + ' ) \n');
+      console.log('#eh_only\\.cms\\.20220505\\.excel' === downloadIdFormatted);
+      // return;
+      await page.evaluate(() =>
+        document.querySelector(downloadIdFormatted).click()
+      );
+      const filename = await waitForDownload(tempDownloadPath);
+      console.log(
+        "\nDownloaded File : " +
+          filename +
+          "\nDownload Path : " +
+          tempDownloadPath +
+          "\n"
+      );
+    } else if (element[0] === "TABLE") {
+    }
+  }
+  console.log("\nAll download complete\nEnd of tension\n");
+  // console.log(downloadStringList);
+}
 
 async function run() {
   const browser = await puppeteer.launch({
@@ -27,10 +86,12 @@ async function run() {
   });
   await (await browser.pages())[0].close();
   const loginLink = await page.$("#login-link");
+  await delay(2000);
   await loginLink.click();
   await page.waitForSelector("#apikey");
   const apikey = await page.$("#apikey");
   await apikey.type(process.env.API_KEY);
+  await delay(5000);
   await page.waitForSelector("#btnLoginApikey"),
     await Promise.all([
       page.click("#btnLoginApikey"),
@@ -39,6 +100,7 @@ async function run() {
         "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
       ),
     ]);
+  await page.waitForNetworkIdle();
   // await page.evaluate(() => document.querySelector('#eh_only\\.cms\\.20220505\\.excel').click());
   // return;
   const downloadTabs = await page.$("#downloadTabs");
@@ -214,13 +276,11 @@ async function run() {
               await childs[l].getProperty("tagName")
             ).jsonValue();
             if (tagName === "H3") {
-              console.log(
-                "\t\t" +
-                  ((await (
-                    await childs[l].getProperty("innerText")
-                  ).jsonValue()) +
-                    "(for C-CDA)")
-              );
+              const headingText = await (
+                await childs[l].getProperty("innerText")
+              ).jsonValue();
+              console.log("\t\t" + (headingText + "(for C-CDA)"));
+              queue.push(["DIR", headingText, "FORWARD", null]);
               const nextSibling = await page.evaluateHandle(
                 (el) => el.nextElementSibling,
                 childs[l]
@@ -230,10 +290,54 @@ async function run() {
                 const tagName = await (
                   await finalChilds[m].getProperty("tagName")
                 ).jsonValue();
+
+                console.log("\t\t\tTagName Test : " + tagName);
                 if (tagName === "TABLE") {
                   console.log("\t\t\t" + "INSIDE TABLE (for C-CDA)");
+                  const tableNameElement = await page.evaluateHandle(
+                    (el) => el.previousElementSibling,
+                    finalChilds[m]
+                  );
+                  const tableNameText = await (
+                    await tableNameElement.getProperty("innerText")
+                  ).jsonValue();
+
+                  const table = finalChilds[m];
+                  const tableRows = await table.$$("tr");
+                  let dataStringForCSV = "";
+                  const headerDataRows = await tableRows[0].$$("th");
+                  for (let [index, headerDataRow] of headerDataRows.entries()) {
+                    const headerText = await (
+                      await headerDataRow.getProperty("innerText")
+                    ).jsonValue();
+                    dataStringForCSV = dataStringForCSV + headerText;
+                    if (!(index === headerDataRows.length - 1)) {
+                      dataStringForCSV = dataStringForCSV + ",";
+                    }
+                  }
+                  dataStringForCSV = dataStringForCSV + "\n";
+                  for (let n = 1; n < tableRows.length; n++) {
+                    const dataRows = await tableRows[n].$$("td");
+                    for (let [index, dataRow] of dataRows.entries()) {
+                      const dataText = await (
+                        await dataRow.getProperty("innerText")
+                      ).jsonValue();
+                      dataStringForCSV = dataStringForCSV + dataText;
+                      if (!(index === dataRows.length - 1)) {
+                        dataStringForCSV = dataStringForCSV + ",";
+                      }
+                    }
+                    dataStringForCSV += "\n";
+                  }
+                  queue.push([
+                    "TABLE",
+                    tableNameText,
+                    "FORMAT",
+                    dataStringForCSV,
+                  ]);
                 }
               }
+              queue.push(["DIR", headingText, "BACKWARD", null]);
             }
           }
         }
@@ -242,11 +346,13 @@ async function run() {
     }
     queue.push(["DIR", tabListItemText, "BACKWARD", null]);
   }
-  console.log("QUEUE contents : \n");
-  console.log("Length : " + queue.length);
-  for (let element of queue) {
-    console.log(element);
-  }
+  // console.log("QUEUE contents : \n");
+  // console.log("Length : " + queue.length);
+  // for (let element of queue) {
+  //   console.log(element);
+  // }
+  console.log("\n\n\nQueue processing : ");
+  await processQueue(queue, page);
   console.log("Completed... \nClosing browser...\n");
   await browser.close();
 }

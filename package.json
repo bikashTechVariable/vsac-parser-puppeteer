@@ -13,6 +13,8 @@
   "dependencies": {
     "dotenv": "^16.0.3",
     "path": "^0.12.7",
-    "puppeteer": "^19.9.0"
+    "puppeteer": "^19.9.0",
+    "puppeteer-utilz": "^4.0.8",
+    "regenerator-runtime": "^0.13.11"
   }
 }
