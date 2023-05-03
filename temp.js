@@ -3,193 +3,10 @@ import dotenv from "dotenv";
 import path from "path";
 import * as fs from "fs-extra";
 import { waitForDownload } from "puppeteer-utilz";
-import { fail } from "assert";
-import * as util from "util";
-import * as cp from "child_process";
 dotenv.config();
 
 const delay = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
-
-const exec = util.promisify(cp.exec);
-
-async function unzip(pathToFileDirectory, fileNameInZippedFormat) {
-  try {
-    await exec(`cd ${pathToFileDirectory}`);
-    const { stdout, stderr } = await exec(`unzip ${fileNameInZippedFormat}`);
-    console.log("Unzipping completed for file : " + pathToFile);
-    await exec(`rm ${fileNameInZippedFormat}`);
-    console.log('Removed zip file and retained the .xlsx file');
-    // console.log('stdout : ', stdout);
-    // console.log('stderr : ', stderr);
-  } catch (error) {
-    console.error(error);
-  }
-}
-
-const queue = [];
-/*
-Each queue element : [type, value, status, id]
-type: DIR / ID / TABLE
-value: dirname/title (in case of id)/table_name (in case of table name)
-status: FORWARD (for dir) / BACKWARD (for dir) / DOWNLOAD (for id) / CSV (for table of CSV type data) 
-id: null (for dir) / id_value (in case of id) / CSV (in case of table)
-*/
-
-function downloadIdFormatter(id) {
-  const tempList = id.split(".");
-  let tempIdString = "";
-  tempIdString += tempList[0];
-  for (let i = 1; i < tempList.length; i++) {
-    tempIdString = tempIdString + "\\." + tempList[i];
-  }
-  return tempIdString;
-}
-
-function downloadPathFormatter(downloadStringList) {
-  let temp = "";
-  temp += downloadStringList[0];
-  for (let i = 1; i < downloadStringList.length; i++) {
-    if (downloadStringList[i].includes("/")) {
-      console.log("Found : " + downloadStringList[i]);
-      temp = temp + "/" + downloadStringList[i].replaceAll("/", "-");
-    } else {
-      temp = temp + "/" + downloadStringList[i];
-    }
-  }
-  return temp;
-}
-
-function idToDefaultFilenameConverter(originalId) {
-  // Reverse engineering successful
-  // Result :
-  // This function gives you the filename which will be set to the file after download
-  const tempList = originalId.split(".");
-  tempList.pop();
-  let tempString = tempList.join("_");
-  tempString = tempString + ".xlsx.zip";
-  return tempString;
-}
-
-function findParamFromId(id) {
-  const idSplitted = id.split(".");
-  return idSplitted[idSplitted.length - 2];
-}
-
-async function processQueue(queue, page) {
-  const failureReport = [];
-  // Status (example DOWNLOAD FAILED)
-  // Status code (example : 500)
-  // Path (join by '->')
-  // Value
-  // Id
-  failureReport.push([
-    "STATUS",
-    "STATUS CODE",
-    "PATH (joined by ->)",
-    "VALUE",
-    "ID",
-  ]);
-
-  let downloadStringList = [".", "download"];
-  const client = await page.target().createCDPSession();
-
-  console.log("\n\nDOWNLOADING STARTED...\n\n\n");
-  for (const [index, element] of queue.entries()) {
-    // console.log(downloadStringList);
-    if (element[0] === "DIR" && element[2] === "FORWARD") {
-      downloadStringList.push(element[1]);
-    } else if (element[0] === "DIR" && element[2] === "BACKWARD") {
-      downloadStringList.pop();
-    } else if (element[0] === "ID") {
-      downloadStringList.push(element[1]);
-      const tempDownloadPath = downloadPathFormatter(downloadStringList);
-
-      await client.send("Page.setDownloadBehavior", {
-        behavior: "allow",
-        downloadPath: tempDownloadPath,
-      });
-      console.log("Download path : " + tempDownloadPath);
-      console.log("Unformatted id : " + element[3]);
-      const downloadId = "#" + element[3];
-      const downloadIdFormatted = downloadIdFormatter(downloadId);
-      console.log("downloadIdFormatted : " + downloadIdFormatted);
-      console.log("Downloading...");
-      // return;
-      await page.evaluate(
-        (downloadIdFormatted) =>
-          document.querySelector(downloadIdFormatted).click(),
-        downloadIdFormatted
-      );
-      // await page.waitForNavigation({ waitUntil: "networkidle0", timeout: 0 });
-      // const filename = await waitForDownload(tempDownloadPath);
-
-      // TODO: Format error in response if element not found
-      const data = await page.waitForResponse(async (response) => {
-        return await response.url().endsWith(findParamFromId(element[3]));
-      });
-      // console.log(data.status());
-      if (data.status() === 500) {
-        failureReport.push([
-          "DOWNLOAD FAILED",
-          "500",
-          downloadStringList.join("->"),
-          element[1],
-          element[3],
-        ]);
-        console.log("File not downloaded in directory : " + tempDownloadPath);
-        downloadStringList.pop();
-        continue;
-      }
-
-      const filename = await waitForDownload(tempDownloadPath);
-      console.log(
-        "\nDownloaded File : " +
-          filename +
-          "\nDownload Path : " +
-          tempDownloadPath +
-          "\n\n"
-      );
-      await unzip(tempDownloadPath, idToDefaultFilenameConverter(element[3]));
-      downloadStringList.pop();
-    } else if (element[0] === "TABLE") {
-      const tempDownloadPath = downloadPathFormatter(downloadStringList);
-      try {
-        await fs.outputFile(
-          tempDownloadPath + `/${element[1]}.csv`,
-          element[3]
-        );
-      } catch (err) {
-        console.error(err);
-      }
-    }
-  }
-  if (failureReport.length > 1) {
-    const tempDownloadPath = "./download/REPORT.txt";
-    let reportString = "";
-    for (let i = 0; i < failureReport.length; i++) {
-      for (let j = 0; j < failureReport[i].length; j++) {
-        reportString = reportString + failureReport[i][j];
-        if (j != failureReport[i].length - 1) {
-          reportString += ",";
-        }
-      }
-      reportString = reportString + "\n";
-    }
-    try {
-      await fs.outputFile(tempDownloadPath, reportString);
-    } catch (error) {
-      console.error(error);
-    }
-    console.log(
-      "FAILURE DETECTED WHILE DOWNLOADING CERTAIN FILES\nPLEASE CHECK THEM INSIDE THE FILE ./download/REPORT.txt"
-    );
-  } else {
-    console.log("ALL FILES DOWNLOADED SUCCESSFULLY\nNO FAILURES DETECTED\n");
-  }
-  console.log("\nAll download complete\nEnd of tension\n");
-  // console.log(downloadStringList);
-}
 
 async function run() {
   const browser = await puppeteer.launch({
@@ -208,12 +25,12 @@ async function run() {
 
   await (await browser.pages())[0].close();
   const loginLink = await page.$("#login-link");
-  await delay(2000);
+  //   await delay(2000);
   await loginLink.click();
   await page.waitForSelector("#apikey");
   const apikey = await page.$("#apikey");
   await apikey.type(process.env.API_KEY);
-  await delay(5000);
+  //   await delay(5000);
   await page.waitForSelector("#btnLoginApikey"),
     await Promise.all([
       page.click("#btnLoginApikey"),
@@ -222,9 +39,24 @@ async function run() {
         "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
       ),
     ]);
-  await page.waitForNetworkIdle();
-  // await page.evaluate(() => document.querySelector('#eh_only\\.cms\\.20220505\\.excel').click());
-  // return;
+  // await page.waitForNetworkIdle();
+  await page.evaluate(() =>
+    document.querySelector("#eh_only\\.cms\\.20220505\\.excel").click()
+  );
+  //   const data = await page.waitForResponse(
+  //     (response) => response.status() === 200
+  //   );
+  const data = await page.waitForResponse(async (response) => {
+    return (await response.url().endsWith('20220505'));
+  });
+  console.log(data.status());
+
+  console.log("Data : " + data);
+  console.log(typeof data);
+  console.log(Object.keys(data));
+  console.log("Closing browser ...");
+  await browser.close();
+  return;
   const downloadTabs = await page.$("#downloadTabs");
   const tablist = await downloadTabs.$('ul[role="tablist"]');
   const tabListItems = await tablist.$$("li");
@@ -464,14 +296,14 @@ async function run() {
     }
     queue.push(["DIR", tabListItemText, "BACKWARD", null]);
   }
-  console.log("QUEUE contents : \n");
-  console.log("Length : " + queue.length);
-  for (let element of queue) {
-    console.log(element);
-  }
-  // console.log("\n\n\nQueue processing : ");
-  // await processQueue(queue, page);
-  // console.log("\n\n\n\n\nBrowser processes : ");
+  // console.log("QUEUE contents : \n");
+  // console.log("Length : " + queue.length);
+  // for (let element of queue) {
+  //   console.log(element);
+  // }
+  console.log("\n\n\nQueue processing : ");
+  await processQueue(queue, page);
+  console.log("\n\n\n\n\nBrowser processes : ");
   console.log("Completed... \nClosing browser...\n");
   await browser.close();
 }
