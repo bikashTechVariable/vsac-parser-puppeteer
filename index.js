@@ -6,22 +6,47 @@ import { waitForDownload } from "puppeteer-utilz";
 import { fail } from "assert";
 import * as util from "util";
 import * as cp from "child_process";
+import { start } from "repl";
 dotenv.config();
+
+console.time("Program execution time : ");
 
 const delay = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-const exec = util.promisify(cp.exec);
+const execDeletePreviousDownloadDirectory = util.promisify(cp.exec);
+try {
+  console.log("Removing previous ./download directory (if exists)");
+  await cp.exec("rm -r ./download");
+} catch (error) {
+  console.error(error);
+}
 
 async function unzip(pathToFileDirectory, fileNameInZippedFormat) {
+  const exec = util.promisify(cp.exec);
+  // pathToFileDirectory = pathToFileDirectory.replaceAll(' ', '\\ ');
+  // fileNameInZippedFormat = fileNameInZippedFormat.replaceAll(' ', '\\ ');
   try {
-    await exec(`cd ${pathToFileDirectory}`);
-    const { stdout, stderr } = await exec(`unzip ${fileNameInZippedFormat}`);
-    console.log("Unzipping completed for file : " + pathToFile);
-    await exec(`rm ${fileNameInZippedFormat}`);
-    console.log('Removed zip file and retained the .xlsx file');
-    // console.log('stdout : ', stdout);
-    // console.log('stderr : ', stderr);
+    // await exec(`cd '${pathToFileDirectory}'`);
+    console.log("Current directory for unzipping : " + pathToFileDirectory);
+    // const { stdout, stderr } = await exec('pwd');
+    // console.log('PWD command : ');
+    // console.log(stdout);
+    console.log("Unzipping...");
+    await exec(
+      `cd '${pathToFileDirectory}' && unzip '${fileNameInZippedFormat}' && rm '${fileNameInZippedFormat}'`
+    );
+    console.log(
+      "Unzipping completed for file : " +
+        pathToFileDirectory +
+        "/" +
+        fileNameInZippedFormat
+    );
+    const xlsxName = fileNameInZippedFormat.split(".");
+    xlsxName.pop();
+    console.log(
+      `Removed : ${fileNameInZippedFormat}\nRetained : ${xlsxName.join(".")}`
+    );
   } catch (error) {
     console.error(error);
   }
@@ -76,6 +101,14 @@ function findParamFromId(id) {
   return idSplitted[idSplitted.length - 2];
 }
 
+async function downloadById(page, downloadIdFormatted) {
+  await page.evaluate(
+    (downloadIdFormatted) =>
+      document.querySelector(downloadIdFormatted).click(),
+    downloadIdFormatted
+  );
+}
+
 async function processQueue(queue, page) {
   const failureReport = [];
   // Status (example DOWNLOAD FAILED)
@@ -95,14 +128,15 @@ async function processQueue(queue, page) {
   const client = await page.target().createCDPSession();
 
   console.log("\n\nDOWNLOADING STARTED...\n\n\n");
-  for (const [index, element] of queue.entries()) {
+  // for (const [index, element] of queue.entries()) {
+  for (let index = 0; index < queue.length; index++) {
     // console.log(downloadStringList);
-    if (element[0] === "DIR" && element[2] === "FORWARD") {
-      downloadStringList.push(element[1]);
-    } else if (element[0] === "DIR" && element[2] === "BACKWARD") {
+    if (queue[index][0] === "DIR" && queue[index][2] === "FORWARD") {
+      downloadStringList.push(queue[index][1]);
+    } else if (queue[index][0] === "DIR" && queue[index][2] === "BACKWARD") {
       downloadStringList.pop();
-    } else if (element[0] === "ID") {
-      downloadStringList.push(element[1]);
+    } else if (queue[index][0] === "ID") {
+      downloadStringList.push(queue[index][1]);
       const tempDownloadPath = downloadPathFormatter(downloadStringList);
 
       await client.send("Page.setDownloadBehavior", {
@@ -110,36 +144,63 @@ async function processQueue(queue, page) {
         downloadPath: tempDownloadPath,
       });
       console.log("Download path : " + tempDownloadPath);
-      console.log("Unformatted id : " + element[3]);
-      const downloadId = "#" + element[3];
+      console.log("Unformatted id : " + queue[index][3]);
+      const downloadId = "#" + queue[index][3];
       const downloadIdFormatted = downloadIdFormatter(downloadId);
       console.log("downloadIdFormatted : " + downloadIdFormatted);
       console.log("Downloading...");
       // return;
-      await page.evaluate(
-        (downloadIdFormatted) =>
-          document.querySelector(downloadIdFormatted).click(),
-        downloadIdFormatted
-      );
+      // await page.evaluate(
+      //   (downloadIdFormatted) =>
+      //     document.querySelector(downloadIdFormatted).click(),
+      //   downloadIdFormatted
+      // );
+      await downloadById(page, downloadIdFormatted);
       // await page.waitForNavigation({ waitUntil: "networkidle0", timeout: 0 });
       // const filename = await waitForDownload(tempDownloadPath);
 
-      // TODO: Format error in response if element not found
+      // TODO: Format error in response if queue[index] not found
       const data = await page.waitForResponse(async (response) => {
-        return await response.url().endsWith(findParamFromId(element[3]));
+        return await response.url().endsWith(findParamFromId(queue[index][3]));
       });
       // console.log(data.status());
-      if (data.status() === 500) {
+
+      if (data.status() >= 500 && data.status() < 600) {
+        console.log("Inside 500-599 error section");
         failureReport.push([
           "DOWNLOAD FAILED",
           "500",
           downloadStringList.join("->"),
-          element[1],
-          element[3],
+          queue[index][1],
+          queue[index][3],
         ]);
         console.log("File not downloaded in directory : " + tempDownloadPath);
         downloadStringList.pop();
         continue;
+      } else if (data.status() >= 400 && data.status() < 500) {
+        console.log("inside 400-499 error section");
+        console.log("Going to page by URL");
+        try {
+          page = await gotoPageByURL(
+            page,
+            "https://vsac.nlm.nih.gov/download/ecqm"
+          );
+        } catch (error) {
+          console.log("Failed going into the page");
+          console.log("Error : \n" + error);
+        }
+        console.log("Logging into the page again");
+        try {
+          page = await logIntoPage(
+            page,
+            "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
+          );
+        } catch (error) {
+          console.log("Login failed!");
+          console.log("Error : \n" + error);
+        }
+        index--;
+        downloadStringList.pop();
       }
 
       const filename = await waitForDownload(tempDownloadPath);
@@ -150,20 +211,21 @@ async function processQueue(queue, page) {
           tempDownloadPath +
           "\n\n"
       );
-      await unzip(tempDownloadPath, idToDefaultFilenameConverter(element[3]));
+      await unzip(tempDownloadPath, filename);
       downloadStringList.pop();
-    } else if (element[0] === "TABLE") {
+    } else if (queue[index][0] === "TABLE") {
       const tempDownloadPath = downloadPathFormatter(downloadStringList);
       try {
         await fs.outputFile(
-          tempDownloadPath + `/${element[1]}.csv`,
-          element[3]
+          tempDownloadPath + `/${queue[index][1]}.csv`,
+          queue[index][3]
         );
       } catch (err) {
         console.error(err);
       }
     }
   }
+
   if (failureReport.length > 1) {
     const tempDownloadPath = "./download/REPORT.txt";
     let reportString = "";
@@ -191,22 +253,15 @@ async function processQueue(queue, page) {
   // console.log(downloadStringList);
 }
 
-async function run() {
-  const browser = await puppeteer.launch({
-    ignoreHTTPSErrors: true,
-    headless: false,
-    defaultViewport: null,
-    devtools: true,
-    // slowMo: 500,
-  });
-  const page = await browser.newPage();
-  await page.goto("https://vsac.nlm.nih.gov/download/ecqm", {
+async function gotoPageByURL(page, url) {
+  await page.goto(url, {
     timeout: 90000,
-    // waitUntil: "domcontentloaded",
     waitUntil: "networkidle2",
   });
+  return page;
+}
 
-  await (await browser.pages())[0].close();
+async function logIntoPage(page, waitForLink) {
   const loginLink = await page.$("#login-link");
   await delay(2000);
   await loginLink.click();
@@ -217,12 +272,47 @@ async function run() {
   await page.waitForSelector("#btnLoginApikey"),
     await Promise.all([
       page.click("#btnLoginApikey"),
-      // page.waitForResponse(response => response.url() === 'https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs' && response.status === 200)
-      page.waitForResponse(
-        "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
-      ),
+      page.waitForResponse(waitForLink),
     ]);
   await page.waitForNetworkIdle();
+  return page;
+}
+
+async function run() {
+  const browser = await puppeteer.launch({
+    ignoreHTTPSErrors: true,
+    headless: false,
+    defaultViewport: null,
+    devtools: true,
+    // slowMo: 500,
+  });
+  let page = await browser.newPage();
+  // await page.goto("https://vsac.nlm.nih.gov/download/ecqm", {
+  //   timeout: 90000,
+  //   waitUntil: "networkidle2",
+  // });
+  page = await gotoPageByURL(page, "https://vsac.nlm.nih.gov/download/ecqm");
+
+  await (await browser.pages())[0].close();
+  // const loginLink = await page.$("#login-link");
+  // await delay(2000);
+  // await loginLink.click();
+  // await page.waitForSelector("#apikey");
+  // const apikey = await page.$("#apikey");
+  // await apikey.type(process.env.API_KEY);
+  // await delay(5000);
+  // await page.waitForSelector("#btnLoginApikey"),
+  //   await Promise.all([
+  //     page.click("#btnLoginApikey"),
+  //     page.waitForResponse(
+  //       "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
+  //     ),
+  //   ]);
+  // await page.waitForNetworkIdle();
+  page = await logIntoPage(
+    page,
+    "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
+  );
   // await page.evaluate(() => document.querySelector('#eh_only\\.cms\\.20220505\\.excel').click());
   // return;
   const downloadTabs = await page.$("#downloadTabs");
@@ -464,16 +554,17 @@ async function run() {
     }
     queue.push(["DIR", tabListItemText, "BACKWARD", null]);
   }
-  console.log("QUEUE contents : \n");
-  console.log("Length : " + queue.length);
-  for (let element of queue) {
-    console.log(element);
-  }
-  // console.log("\n\n\nQueue processing : ");
-  // await processQueue(queue, page);
-  // console.log("\n\n\n\n\nBrowser processes : ");
+  // console.log("QUEUE contents : \n");
+  // console.log("Length : " + queue.length);
+  // for (let element of queue) {
+  //   console.log(element);
+  // }
+  console.log("\n\n\nQueue processing : ");
+  await processQueue(queue, page);
+  console.log("\n\n\n\n\nBrowser processes : ");
   console.log("Completed... \nClosing browser...\n");
   await browser.close();
+  console.timeEnd("Program execution time : ");
 }
 
 run();
