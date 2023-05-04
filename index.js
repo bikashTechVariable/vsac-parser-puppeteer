@@ -149,12 +149,7 @@ async function processQueue(queue, page) {
       const downloadIdFormatted = downloadIdFormatter(downloadId);
       console.log("downloadIdFormatted : " + downloadIdFormatted);
       console.log("Downloading...");
-      // return;
-      // await page.evaluate(
-      //   (downloadIdFormatted) =>
-      //     document.querySelector(downloadIdFormatted).click(),
-      //   downloadIdFormatted
-      // );
+
       await downloadById(page, downloadIdFormatted);
       // await page.waitForNavigation({ waitUntil: "networkidle0", timeout: 0 });
       // const filename = await waitForDownload(tempDownloadPath);
@@ -227,7 +222,7 @@ async function processQueue(queue, page) {
   }
 
   if (failureReport.length > 1) {
-    const tempDownloadPath = "./download/REPORT.txt";
+    const tempDownloadPath = "./download/REPORT.csv";
     let reportString = "";
     for (let i = 0; i < failureReport.length; i++) {
       for (let j = 0; j < failureReport[i].length; j++) {
@@ -287,28 +282,10 @@ async function run() {
     // slowMo: 500,
   });
   let page = await browser.newPage();
-  // await page.goto("https://vsac.nlm.nih.gov/download/ecqm", {
-  //   timeout: 90000,
-  //   waitUntil: "networkidle2",
-  // });
   page = await gotoPageByURL(page, "https://vsac.nlm.nih.gov/download/ecqm");
 
   await (await browser.pages())[0].close();
-  // const loginLink = await page.$("#login-link");
-  // await delay(2000);
-  // await loginLink.click();
-  // await page.waitForSelector("#apikey");
-  // const apikey = await page.$("#apikey");
-  // await apikey.type(process.env.API_KEY);
-  // await delay(5000);
-  // await page.waitForSelector("#btnLoginApikey"),
-  //   await Promise.all([
-  //     page.click("#btnLoginApikey"),
-  //     page.waitForResponse(
-  //       "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
-  //     ),
-  //   ]);
-  // await page.waitForNetworkIdle();
+
   page = await logIntoPage(
     page,
     "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
@@ -360,7 +337,6 @@ async function run() {
       );
       let accordionDivChilds = await accordionDiv.$$(":scope > *");
       for (let k = 0; k < accordionDivChilds.length; k++) {
-        // console.log('\t' + await (await accordionDivChilds[k].getProperty('tagName')).jsonValue());
         const tagName = await (
           await accordionDivChilds[k].getProperty("tagName")
         ).jsonValue();
@@ -419,7 +395,6 @@ async function run() {
                 await childs[l].getProperty("tagName")
               ).jsonValue();
               if (tagName === "TABLE") {
-                // console.log('\n\nThis should be in section : ecqm');
                 console.log("\t\t" + "INSIDE TABLE");
                 const className = await page.evaluate(
                   (el) => el.className,
@@ -427,23 +402,19 @@ async function run() {
                 );
                 console.log("\t\tClassName : " + className);
                 let indexCMS = null;
-                // console.log(await (await childs[l].getProperty('innerHTML')).jsonValue());
                 const tableHeads = await childs[l].$$(
                   "table > thead > tr > th"
                 );
-                // console.log('\t\t' + tableHeads);
                 console.log("\t\t" + tableHeads.length);
                 for (let m = 0; m < tableHeads.length; m++) {
                   const title = await (
                     await tableHeads[m].getProperty("innerText")
                   ).jsonValue();
-                  // console.log('\t\t\ttitle : ' + title);
                   if (title.toLowerCase().includes("cms")) {
                     indexCMS = m;
                   }
                 }
                 const downloadRows = await childs[l].$$("table > tbody > tr");
-                // console.log("\t\tdownloadRows : " + downloadRows);
                 console.log("\t\tlength : " + downloadRows.length);
                 for (let downloadRow of downloadRows) {
                   const downloadTitle = await downloadRow.$(
@@ -455,8 +426,7 @@ async function run() {
                   console.log("\t\tdownloadTitleText : " + downloadTitleText);
                   const rowData = await downloadRow.$$("td");
                   const buttons = await rowData[indexCMS].$$("button");
-                  // console.log('\t\t'+buttons);
-                  // console.log('\t\t'+buttons.length);
+
                   for (let button of buttons) {
                     const buttonText = await (
                       await button.getProperty("innerText")
