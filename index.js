@@ -1,25 +1,55 @@
 import puppeteer from "puppeteer";
 import dotenv from "dotenv";
 import path from "path";
-import * as fs from "fs-extra";
+import * as fsextra from "fs-extra";
+import fs from "fs";
 import { waitForDownload } from "puppeteer-utilz";
 import { fail } from "assert";
 import * as util from "util";
 import * as cp from "child_process";
 import { start } from "repl";
 dotenv.config();
+import xlsx from "xlsx";
 
 console.time("Program execution time : ");
+
+async function convertCsvToXlsx(inputPath, outputPath) {
+  try {
+    // Read the CSV file
+    const csvData = await fs.promises.readFile(inputPath, "utf8");
+
+    // Parse the CSV data into a worksheet
+    const sheet = xlsx.utils.json_to_sheet(
+      csvData.split("\n").map((line) => {
+        return line.split(",");
+      })
+    );
+
+    // Create a workbook and add the worksheet
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, sheet, "Sheet1");
+
+    // Write the workbook to an XLSX file
+    await xlsx.writeFile(workbook, outputPath);
+
+    console.log("Conversion complete from CSV to XLSX!");
+  } catch (error) {
+    console.error("An error occurred while converting the file:", error);
+  }
+}
 
 const delay = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const execDeletePreviousDownloadDirectory = util.promisify(cp.exec);
-try {
-  console.log("Removing previous ./download directory (if exists)");
-  await cp.exec("rm -r ./download");
-} catch (error) {
-  console.error(error);
+
+async function deleteDownloadDirectory() {
+  try {
+    console.log("Removing previous ./download directory (if exists)");
+    await cp.exec("rm -r ./download");
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 async function unzip(pathToFileDirectory, fileNameInZippedFormat) {
@@ -165,7 +195,7 @@ async function processQueue(queue, page) {
         failureReport.push([
           "DOWNLOAD FAILED",
           "500",
-          downloadStringList.join("->"),
+          JSON.stringify(downloadStringList),
           queue[index][1],
           queue[index][3],
         ]);
@@ -211,7 +241,7 @@ async function processQueue(queue, page) {
     } else if (queue[index][0] === "TABLE") {
       const tempDownloadPath = downloadPathFormatter(downloadStringList);
       try {
-        await fs.outputFile(
+        await fsextra.outputFile(
           tempDownloadPath + `/${queue[index][1]}.csv`,
           queue[index][3]
         );
@@ -227,19 +257,31 @@ async function processQueue(queue, page) {
     for (let i = 0; i < failureReport.length; i++) {
       for (let j = 0; j < failureReport[i].length; j++) {
         reportString = reportString + failureReport[i][j];
-        if (j != failureReport[i].length - 1) {
+        if (j !== failureReport[i].length - 1) {
           reportString += ",";
         }
       }
-      reportString = reportString + "\n";
+      if (i !== failureReport.length - 1) reportString = reportString + "\n";
     }
     try {
-      await fs.outputFile(tempDownloadPath, reportString);
+      console.log("Report string : " + reportString);
+      await fsextra.outputFile(tempDownloadPath, reportString);
+      // Convert from CSV to XLSX
+      try {
+        await convertCsvToXlsx(
+          "./download/REPORT.csv",
+          "./download/REPORT.xlsx"
+        );
+      } catch (error) {
+        console.log("Error occured while converting csv to xlsx");
+        console.log("Error" + error);
+      }
     } catch (error) {
+      console.log("Error occured while generating CSV file");
       console.error(error);
     }
     console.log(
-      "FAILURE DETECTED WHILE DOWNLOADING CERTAIN FILES\nPLEASE CHECK THEM INSIDE THE FILE ./download/REPORT.txt"
+      "FAILURE DETECTED WHILE DOWNLOADING CERTAIN FILES\nPLEASE CHECK THEM INSIDE THE FILE ./download/REPORT.csv"
     );
   } else {
     console.log("ALL FILES DOWNLOADED SUCCESSFULLY\nNO FAILURES DETECTED\n");
@@ -537,4 +579,5 @@ async function run() {
   console.timeEnd("Program execution time : ");
 }
 
+await deleteDownloadDirectory();
 run();
