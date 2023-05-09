@@ -1,15 +1,20 @@
+/* NOTE:
+1. Commas inside data may lead to abnormality for dealing with CSV files
+2. Reauthenticate when access token expires
+*/
+
 import puppeteer from "puppeteer";
 import dotenv from "dotenv";
 import path from "path";
 import * as fsextra from "fs-extra";
 import fs from "fs";
 import { waitForDownload } from "puppeteer-utilz";
-import { fail } from "assert";
 import * as util from "util";
 import * as cp from "child_process";
-import { start } from "repl";
 dotenv.config();
 import xlsx from "xlsx";
+
+const RETRY_COUNT = parseInt(process.env.RETRY_COUNT);
 
 console.time("Program execution time : ");
 
@@ -139,6 +144,27 @@ async function downloadById(page, downloadIdFormatted) {
   );
 }
 
+async function reAuthenticate(page) {
+  console.log("Going to page by URL");
+  try {
+    page = await gotoPageByURL(page, "https://vsac.nlm.nih.gov/download/ecqm");
+  } catch (error) {
+    console.log("Failed going into the page");
+    console.log("Error : \n" + error);
+  }
+  console.log("Logging into the page again");
+  try {
+    page = await logIntoPage(
+      page,
+      "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
+    );
+  } catch (error) {
+    console.log("Login failed!");
+    console.log("Error : \n" + error);
+  }
+  return page;
+}
+
 async function processQueue(queue, page) {
   const failureReport = [];
   // Status (example DOWNLOAD FAILED)
@@ -146,19 +172,20 @@ async function processQueue(queue, page) {
   // Path (join by '->')
   // Value
   // Id
+  // retry count
   failureReport.push([
     "STATUS",
     "STATUS CODE",
     "PATH (joined by ->)",
     "VALUE",
     "ID",
+    "RETRY_COUNT",
   ]);
 
   let downloadStringList = [".", "download"];
   const client = await page.target().createCDPSession();
 
   console.log("\n\nDOWNLOADING STARTED...\n\n\n");
-  // for (const [index, element] of queue.entries()) {
   for (let index = 0; index < queue.length; index++) {
     // console.log(downloadStringList);
     if (queue[index][0] === "DIR" && queue[index][2] === "FORWARD") {
@@ -184,60 +211,90 @@ async function processQueue(queue, page) {
       // await page.waitForNavigation({ waitUntil: "networkidle0", timeout: 0 });
       // const filename = await waitForDownload(tempDownloadPath);
 
-      // TODO: Format error in response if queue[index] not found
       const data = await page.waitForResponse(async (response) => {
         return await response.url().endsWith(findParamFromId(queue[index][3]));
       });
       // console.log(data.status());
 
-      if (data.status() >= 500 && data.status() < 600) {
-        console.log("Inside 500-599 error section");
-        failureReport.push([
-          "DOWNLOAD FAILED",
-          "500",
-          JSON.stringify(downloadStringList),
-          queue[index][1],
-          queue[index][3],
-        ]);
-        console.log("File not downloaded in directory : " + tempDownloadPath);
+      if (data.status() >= 200 && data.status() < 300) {
+        const filename = await waitForDownload(tempDownloadPath);
+        console.log(
+          "\nDownloaded File : " +
+            filename +
+            "\nDownload Path : " +
+            tempDownloadPath +
+            "\n\n"
+        );
+        await unzip(tempDownloadPath, filename);
         downloadStringList.pop();
-        continue;
+      } else if (data.status() >= 500 && data.status() < 600) {
+        console.log("Inside 500-599 error section");
+        // retry mechanism
+        for (let tryCount = 0; tryCount < RETRY_COUNT; tryCount++) {
+          let errorFlag = false;
+          let success = false;
+          try {
+            await downloadById(page, downloadIdFormatted);
+            const dataRetry = await page.waitForResponse(async (response) => {
+              return await response
+                .url()
+                .endsWith(findParamFromId(queue[index][3]));
+            });
+            if (dataRetry.status() >= 200 && dataRetry.status() < 300) {
+              const filename = await waitForDownload(tempDownloadPath);
+              console.log(
+                "\nDownloaded File : " +
+                  filename +
+                  "\nDownload Path : " +
+                  tempDownloadPath +
+                  "\n\n"
+              );
+              await unzip(tempDownloadPath, filename);
+              downloadStringList.pop();
+              success = true;
+            } else if (dataRetry.status() >= 500 && dataRetry.status() < 600) {
+              continue;
+            } else if (dataRetry.status() >= 400 && dataRetry.status() < 500) {
+              page = await reAuthenticate(page);
+            }
+          } catch (error) {
+            console.log(
+              "Error while retrying to download as per the retry mechanism"
+            );
+            console.log(error);
+            errorFlag = true;
+          } finally {
+            if (success === true) {
+              tryCount = RETRY_COUNT;
+              continue;
+            } else if (errorFlag === true || tryCount === RETRY_COUNT - 1) {
+              failureReport.push([
+                "DOWNLOAD FAILED",
+                data.status(),
+                tempDownloadPath,
+                queue[index][1],
+                queue[index][3],
+                RETRY_COUNT,
+              ]);
+              console.log(
+                "File not downloaded in directory : " + tempDownloadPath
+              );
+              downloadStringList.pop();
+              continue;
+            }
+          }
+        }
       } else if (data.status() >= 400 && data.status() < 500) {
         console.log("inside 400-499 error section");
-        console.log("Going to page by URL");
-        try {
-          page = await gotoPageByURL(
-            page,
-            "https://vsac.nlm.nih.gov/download/ecqm"
-          );
-        } catch (error) {
-          console.log("Failed going into the page");
-          console.log("Error : \n" + error);
-        }
-        console.log("Logging into the page again");
-        try {
-          page = await logIntoPage(
-            page,
-            "https://vsac.nlm.nih.gov/vsac/pc/vs/getInactiveTabs"
-          );
-        } catch (error) {
-          console.log("Login failed!");
-          console.log("Error : \n" + error);
-        }
+        page = await reAuthenticate(page);
         index--;
         downloadStringList.pop();
+      } else {
+        console.error(
+          "CHECK SCRIPT PLEASE ALONGWITH INSPECTION OF WEBSITE YOU ARE SCRAPPING AS : STATUS CODE NOT RECOGNISED."
+        );
+        process.exit(1);
       }
-
-      const filename = await waitForDownload(tempDownloadPath);
-      console.log(
-        "\nDownloaded File : " +
-          filename +
-          "\nDownload Path : " +
-          tempDownloadPath +
-          "\n\n"
-      );
-      await unzip(tempDownloadPath, filename);
-      downloadStringList.pop();
     } else if (queue[index][0] === "TABLE") {
       const tempDownloadPath = downloadPathFormatter(downloadStringList);
       try {
@@ -245,6 +302,18 @@ async function processQueue(queue, page) {
           tempDownloadPath + `/${queue[index][1]}.csv`,
           queue[index][3]
         );
+        // Convert from CSV to XLSX
+        try {
+          await convertCsvToXlsx(
+            tempDownloadPath + `/${queue[index][1]}.csv`,
+            tempDownloadPath + `/${queue[index][1]}.xlsx`
+          );
+        } catch (error) {
+          console.log(
+            "Error occured while converting csv to xlsx for table data"
+          );
+          console.log("Error" + error);
+        }
       } catch (err) {
         console.error(err);
       }
@@ -256,7 +325,8 @@ async function processQueue(queue, page) {
     let reportString = "";
     for (let i = 0; i < failureReport.length; i++) {
       for (let j = 0; j < failureReport[i].length; j++) {
-        reportString = reportString + failureReport[i][j];
+        reportString =
+          reportString + failureReport[i][j].replaceAll(",", "\uff0c");
         if (j !== failureReport[i].length - 1) {
           reportString += ",";
         }
@@ -340,7 +410,8 @@ async function run() {
   console.log(
     await (await tabListItems[0].getProperty("innerText")).jsonValue()
   );
-  for (let i = 0; i < tabListItems.length; i++) {
+  // TODO: Change i = 1, to i = 0.
+  for (let i = 1; i < tabListItems.length; i++) {
     const tabListItemText = await (
       await tabListItems[i].getProperty("textContent")
     ).jsonValue();
