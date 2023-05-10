@@ -253,8 +253,10 @@ async function processQueue(queue, page) {
               downloadStringList.pop();
               success = true;
             } else if (dataRetry.status() >= 500 && dataRetry.status() < 600) {
+              console.log("dataRetry -> 500 section -> continue");
               continue;
             } else if (dataRetry.status() >= 400 && dataRetry.status() < 500) {
+              console.log("dataRetry -> 400 section -> reauthenticate");
               page = await reAuthenticate(page);
             }
           } catch (error) {
@@ -325,8 +327,9 @@ async function processQueue(queue, page) {
     let reportString = "";
     for (let i = 0; i < failureReport.length; i++) {
       for (let j = 0; j < failureReport[i].length; j++) {
+        console.log('reportString[i][j] : ' + reportString);
         reportString =
-          reportString + failureReport[i][j].replaceAll(",", "\uff0c");
+          reportString + String(failureReport[i][j]).replaceAll(",", "\uff0c");
         if (j !== failureReport[i].length - 1) {
           reportString += ",";
         }
@@ -410,8 +413,7 @@ async function run() {
   console.log(
     await (await tabListItems[0].getProperty("innerText")).jsonValue()
   );
-  // TODO: Change i = 1, to i = 0.
-  for (let i = 1; i < tabListItems.length; i++) {
+  for (let i = 0; i < tabListItems.length; i++) {
     const tabListItemText = await (
       await tabListItems[i].getProperty("textContent")
     ).jsonValue();
@@ -644,7 +646,6 @@ async function run() {
   // }
   console.log("\n\n\nQueue processing : ");
   await processQueue(queue, page);
-  console.log("\n\n\n\n\nBrowser processes : ");
   console.log("Completed... \nClosing browser...\n");
   await browser.close();
   console.timeEnd("Program execution time : ");
